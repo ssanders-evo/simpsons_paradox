@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import streamlit as st
 
 
@@ -36,7 +35,6 @@ def simulate_call_center(
     """
     rng = np.random.default_rng(seed)
 
-    # Higher proficiency => lower baseline CST and more total engagements
     proficiency = rng.normal(loc=0.0, scale=1.0, size=n_experts)
 
     raw_volume = np.exp(
@@ -90,6 +88,9 @@ def simulate_call_center(
     return df, expert_df
 
 
+# -----------------------------
+# Aggregations
+# -----------------------------
 def make_aggregate_curve(df):
     return (
         df.groupby("nth_engagement", as_index=False)
@@ -107,7 +108,8 @@ def make_segmented_curves(df, cutoffs=(5, 10, 15, 20)):
             .mean()
             .rename(columns={"cst_minutes": "avg_cst"})
         )
-        curve["target_n"] = cutoff
+        curve["target_n"] = f"{cutoff}+"
+        curve["cutoff"] = cutoff
         curve["n_experts_in_group"] = sub["expert_id"].nunique()
         parts.append(curve)
     return pd.concat(parts, ignore_index=True)
@@ -148,52 +150,100 @@ def expert_level_summary(df, expert_df):
 
 
 # -----------------------------
-# Plotting
+# Chart helpers
 # -----------------------------
-def plot_aggregate(aggregate):
-    fig, ax = plt.subplots(figsize=(11, 5))
-    ax.plot(aggregate["nth_engagement"], aggregate["avg_cst"], marker="o")
-    ax.set_title("Aggregate CST by Nth Engagement")
-    ax.set_xlabel("Nth Engagement")
-    ax.set_ylabel("Average CST (minutes)")
-    ax.grid(alpha=0.3)
-    return fig
+def prep_aggregate_chart(aggregate):
+    chart_df = aggregate[["nth_engagement", "avg_cst"]].copy()
+    chart_df = chart_df.set_index("nth_engagement")
+    return chart_df
 
 
 
-def plot_segmented(segmented, cutoffs):
-    fig, ax = plt.subplots(figsize=(11, 5))
-    for cutoff in cutoffs:
-        tmp = segmented[segmented["target_n"] == cutoff]
-        ax.plot(tmp["nth_engagement"], tmp["avg_cst"], marker="o", label=f"{cutoff}+")
-    ax.set_title("Segmented CST Curves (Inclusive Threshold Cohorts)")
-    ax.set_xlabel("Nth Engagement")
-    ax.set_ylabel("Average CST (minutes)")
-    ax.legend(title="Target n")
-    ax.grid(alpha=0.3)
-    return fig
+def prep_segmented_chart(segmented, cutoffs):
+    wide = (
+        segmented[segmented["cutoff"].isin(cutoffs)]
+        .pivot(index="nth_engagement", columns="target_n", values="avg_cst")
+        .sort_index()
+    )
+    ordered_cols = [f"{c}+" for c in cutoffs if f"{c}+" in wide.columns]
+    if ordered_cols:
+        wide = wide[ordered_cols]
+    return wide
 
 
 
-def plot_tail_sample_size(aggregate):
-    fig, ax = plt.subplots(figsize=(11, 4))
-    ax.plot(aggregate["nth_engagement"], aggregate["n_experts"], marker="o")
-    ax.set_title("Experts Contributing to Each Nth Engagement")
-    ax.set_xlabel("Nth Engagement")
-    ax.set_ylabel("Unique Experts")
-    ax.grid(alpha=0.3)
-    return fig
+def prep_tail_sample_chart(aggregate):
+    chart_df = aggregate[["nth_engagement", "n_experts"]].copy()
+    chart_df = chart_df.set_index("nth_engagement")
+    return chart_df
 
 
 
-def plot_volume_histogram(expert_df):
-    fig, ax = plt.subplots(figsize=(11, 4))
-    ax.hist(expert_df["total_engagements"], bins=30)
-    ax.set_title("Distribution of Total Engagements per Expert")
-    ax.set_xlabel("Total Engagements")
-    ax.set_ylabel("Number of Experts")
-    ax.grid(alpha=0.2)
-    return fig
+def prep_volume_histogram(expert_df):
+    counts = (
+        expert_df["total_engagements"]
+        .value_counts()
+        .sort_index()
+        .rename_axis("total_engagements")
+        .reset_index(name="n_experts")
+        .set_index("total_engagements")
+    )
+    return counts
+
+
+# -----------------------------
+# Presets
+# -----------------------------
+PRESETS = {
+    "Composition artifact": {
+        "n_experts": 2500,
+        "max_engagements": 55,
+        "mean_cst": 78.0,
+        "proficiency_sd": 11.0,
+        "volume_link_strength": 0.95,
+        "small_learning": -0.12,
+        "noise_sd": 9.0,
+        "complexity_drift_mean": 0.03,
+        "volume_noise_sd": 0.45,
+        "cutoffs": [5, 10, 15, 20],
+    },
+    "True learning only": {
+        "n_experts": 2500,
+        "max_engagements": 55,
+        "mean_cst": 78.0,
+        "proficiency_sd": 2.0,
+        "volume_link_strength": 0.05,
+        "small_learning": -0.45,
+        "noise_sd": 9.0,
+        "complexity_drift_mean": 0.00,
+        "volume_noise_sd": 0.65,
+        "cutoffs": [5, 10, 15, 20],
+    },
+    "Learning plus selection": {
+        "n_experts": 2500,
+        "max_engagements": 55,
+        "mean_cst": 78.0,
+        "proficiency_sd": 9.0,
+        "volume_link_strength": 0.75,
+        "small_learning": -0.30,
+        "noise_sd": 9.0,
+        "complexity_drift_mean": 0.02,
+        "volume_noise_sd": 0.45,
+        "cutoffs": [5, 10, 15, 20],
+    },
+    "Tail instability stress test": {
+        "n_experts": 600,
+        "max_engagements": 70,
+        "mean_cst": 78.0,
+        "proficiency_sd": 11.0,
+        "volume_link_strength": 1.10,
+        "small_learning": -0.10,
+        "noise_sd": 14.0,
+        "complexity_drift_mean": 0.03,
+        "volume_noise_sd": 0.35,
+        "cutoffs": [5, 10, 15, 20],
+    },
+}
 
 
 # -----------------------------
@@ -205,18 +255,21 @@ st.caption(
 )
 
 with st.sidebar:
-    st.header("Simulation controls")
+    st.header("Scenario")
+    preset_name = st.selectbox("Preset", list(PRESETS.keys()), index=0)
+    preset = PRESETS[preset_name]
 
-    n_experts = st.slider("Number of experts", 200, 10000, 2500, 100)
-    max_engagements = st.slider("Maximum engagements", 20, 100, 55, 1)
-    mean_cst = st.slider("Overall mean CST", 40.0, 120.0, 78.0, 1.0)
+    st.header("Simulation controls")
+    n_experts = st.slider("Number of experts", 200, 10000, preset["n_experts"], 100)
+    max_engagements = st.slider("Maximum engagements", 20, 100, preset["max_engagements"], 1)
+    mean_cst = st.slider("Overall mean CST", 40.0, 120.0, preset["mean_cst"], 1.0)
 
     st.subheader("Key teaching knobs")
     proficiency_sd = st.slider(
         "Between-expert heterogeneity",
         0.0,
         20.0,
-        11.0,
+        preset["proficiency_sd"],
         0.5,
         help="Higher values create larger baseline CST differences across experts. Lesson: stronger heterogeneity creates more vertical separation across segmented curves.",
     )
@@ -224,7 +277,7 @@ with st.sidebar:
         "Selection strength: proficiency -> volume",
         0.0,
         2.0,
-        0.95,
+        preset["volume_link_strength"],
         0.05,
         help="Higher values make low-CST experts more likely to reach later engagements. Lesson: stronger selection makes the aggregate curve look more like learning even when within-expert learning is weak.",
     )
@@ -232,7 +285,7 @@ with st.sidebar:
         "True within-expert learning per engagement",
         -1.0,
         1.0,
-        -0.12,
+        preset["small_learning"],
         0.01,
         help="Negative values mean experts genuinely get faster. Lesson: compare real within-expert learning against the apparent learning in the aggregate curve.",
     )
@@ -240,7 +293,7 @@ with st.sidebar:
         "Engagement-level noise",
         0.0,
         25.0,
-        9.0,
+        preset["noise_sd"],
         0.5,
         help="Higher values increase jaggedness. Lesson: random noise matters much more when only a few experts remain in the tail.",
     )
@@ -250,15 +303,15 @@ with st.sidebar:
         "Case complexity drift per engagement",
         -0.20,
         0.20,
-        0.03,
+        preset["complexity_drift_mean"],
         0.005,
-        help="Positive values make later engagements slightly harder. Lesson: even a small worsening case mix can flatten or reverse true learning.",
+        help="Positive values make later engagements slightly harder. Lesson: even a small worsening case mix can flatten or offset real learning.",
     )
     volume_noise_sd = st.slider(
         "Randomness in engagement count generation",
         0.0,
         1.5,
-        0.45,
+        preset["volume_noise_sd"],
         0.05,
         help="Higher values weaken the clean link between proficiency and total engagements. Lesson: noisier assignment reduces the composition effect.",
     )
@@ -268,7 +321,7 @@ with st.sidebar:
     selected_cutoffs = st.multiselect(
         "Inclusive cohort cutoffs",
         options=[3, 5, 8, 10, 12, 15, 20, 25, 30],
-        default=[5, 10, 15, 20],
+        default=preset["cutoffs"],
         help="Experts with total engagements >= cutoff are included in that cohort, and the curve is censored at the cutoff.",
     )
     selected_cutoffs = sorted(selected_cutoffs) if selected_cutoffs else [5, 10, 15, 20]
@@ -340,10 +393,12 @@ def run_simulation_cached(
     tuple(selected_cutoffs),
 )
 
+aggregate_chart = prep_aggregate_chart(aggregate)
+segmented_chart = prep_segmented_chart(segmented, selected_cutoffs)
+tail_chart = prep_tail_sample_chart(aggregate)
+volume_hist = prep_volume_histogram(expert_df)
 
-# -----------------------------
-# Main layout
-# -----------------------------
+
 lesson = """
 Default reading of the aggregate curve is dangerous. A declining pooled CST curve can be produced by changing sample composition rather than real learning. In this simulation, later nth engagements are disproportionately contributed by experts who were already better to begin with.
 """
@@ -360,28 +415,28 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     left, right = st.columns([2, 1])
     with left:
-        st.pyplot(plot_aggregate(aggregate), clear_figure=True)
+        st.subheader("Aggregate CST by Nth Engagement")
+        st.line_chart(aggregate_chart, height=360)
     with right:
         st.metric("Experts at engagement 1", int(aggregate["n_experts"].iloc[0]))
         st.metric("Experts at final engagement", int(aggregate["n_experts"].iloc[-1]))
         st.metric("Aggregate CST at engagement 1", f"{aggregate['avg_cst'].iloc[0]:.1f}")
         st.metric("Aggregate CST at final engagement", f"{aggregate['avg_cst'].iloc[-1]:.1f}")
-
         st.write("What to notice")
         st.write(
             "If the aggregate curve slopes down, that does not by itself imply within-expert learning. Check whether later positions are supported by a different subset of experts."
         )
 
     with st.expander("Show segmented curves here too"):
-        st.pyplot(plot_segmented(segmented, selected_cutoffs), clear_figure=True)
+        st.line_chart(segmented_chart, height=360)
 
 with tab2:
-    st.pyplot(plot_segmented(segmented, selected_cutoffs), clear_figure=True)
+    st.subheader("Segmented CST Curves")
+    st.line_chart(segmented_chart, height=420)
     st.write("Interpretation")
     st.write(
         "Vertical separation across curves indicates baseline differences across experts who survive to higher engagement counts. Flat within-cohort lines imply little true learning. Strong downward slopes within each cohort would be stronger evidence of real within-expert improvement."
     )
-
     segmented_table = segmented.copy()
     segmented_table["avg_cst"] = segmented_table["avg_cst"].round(2)
     st.dataframe(segmented_table, use_container_width=True)
@@ -389,9 +444,11 @@ with tab2:
 with tab3:
     c1, c2 = st.columns(2)
     with c1:
-        st.pyplot(plot_tail_sample_size(aggregate), clear_figure=True)
+        st.subheader("Experts Contributing to Each Nth Engagement")
+        st.line_chart(tail_chart, height=320)
     with c2:
-        st.pyplot(plot_volume_histogram(expert_df), clear_figure=True)
+        st.subheader("Distribution of Total Engagements per Expert")
+        st.bar_chart(volume_hist, height=320)
 
     st.write("Selection diagnostics")
     m1, m2 = st.columns(2)
@@ -410,35 +467,21 @@ with tab3:
 
 with tab4:
     st.subheader("How to teach with the controls")
-
     st.markdown(
         """
-1. **Start from the default aggregate view.**
-   Ask: does this look like learning? Most people will say yes.
-
-2. **Then open the segmented view.**
-   Show that much of the pattern is actually vertical separation, not within-group decline.
-
-3. **Increase selection strength.**
-   The aggregate decline gets steeper, even if true learning stays close to zero. This teaches how survivorship or selective continuation can create misleading pooled trends.
-
-4. **Increase between-expert heterogeneity.**
-   The segmented curves separate more strongly. This teaches how baseline differences drive composition artifacts.
-
-5. **Set true learning close to zero.**
-   If the aggregate still declines, that demonstrates the core point: pooled decline is not sufficient evidence for learning.
-
-6. **Increase engagement-level noise or reduce number of experts.**
-   The tail gets spiky. This teaches why late-sequence averages become unstable when few experts remain in the denominator.
-
-7. **Add positive case complexity drift.**
-   This can flatten or offset real learning. This teaches that outcome trends reflect both proficiency change and task mix.
+1. **Start from the default aggregate view.** Ask whether the pattern looks like learning.
+2. **Then open the segmented view.** Show that much of the pattern is vertical separation, not within-group decline.
+3. **Increase selection strength.** The aggregate decline gets steeper even if true learning stays close to zero.
+4. **Increase between-expert heterogeneity.** The segmented curves separate more strongly.
+5. **Set true learning close to zero.** If the aggregate still declines, that demonstrates the core point.
+6. **Increase noise or reduce number of experts.** The tail gets spiky because late averages become unstable.
+7. **Add positive case complexity drift.** This can flatten or offset real learning.
         """
     )
 
     st.subheader("Interpretive lesson")
     st.write(
-        "When the composition of who remains in the sample changes over sequence position, aggregate trajectories confound within-expert change with between-expert selection. The right analysis question is usually not just 'what is the average outcome at nth engagement?' but 'who is still represented at nth engagement, and how do they differ from those who are no longer represented?'"
+        "When the composition of who remains in the sample changes over sequence position, aggregate trajectories confound within-expert change with between-expert selection. The right question is usually not just 'what is the average outcome at nth engagement?' but 'who is still represented at nth engagement, and how do they differ from those who are no longer represented?'"
     )
 
     st.subheader("Suggested classroom demos")
