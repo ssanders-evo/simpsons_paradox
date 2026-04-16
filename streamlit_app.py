@@ -281,13 +281,13 @@ with st.sidebar:
         0.05,
         help="Higher values make low-CST experts more likely to reach later engagements. Lesson: stronger selection makes the aggregate curve look more like learning even when within-expert learning is weak.",
     )
-    small_learning = st.slider(
-        "True within-expert learning per engagement",
-        -1.0,
+    learning_improvement = st.slider(
+        "Within-expert efficiency gain per engagement",
+        0.0,
         1.0,
-        preset["small_learning"],
+        max(0.0, -preset["small_learning"]),
         0.01,
-        help="Negative values mean experts genuinely get faster. Lesson: compare real within-expert learning against the apparent learning in the aggregate curve.",
+        help="Higher values mean experts get faster over successive engagements, reducing CST.",
     )
     noise_sd = st.slider(
         "Engagement-level noise",
@@ -334,7 +334,7 @@ def run_simulation_cached(
     mean_cst,
     proficiency_sd,
     volume_link_strength,
-    small_learning,
+    learning_improvement,
     noise_sd,
     complexity_drift_mean,
     volume_noise_sd,
@@ -348,7 +348,7 @@ def run_simulation_cached(
         mean_cst=mean_cst,
         proficiency_sd=proficiency_sd,
         noise_sd=noise_sd,
-        small_learning=small_learning,
+        small_learning=-learning_improvement,
         complexity_drift_mean=complexity_drift_mean,
         complexity_drift_sd=0.015,
         volume_link_strength=volume_link_strength,
@@ -385,7 +385,7 @@ def run_simulation_cached(
     mean_cst,
     proficiency_sd,
     volume_link_strength,
-    small_learning,
+    learning_improvement,
     noise_sd,
     complexity_drift_mean,
     volume_noise_sd,
@@ -399,17 +399,12 @@ tail_chart = prep_tail_sample_chart(aggregate)
 volume_hist = prep_volume_histogram(expert_df)
 
 
-lesson = """
-Default reading of the aggregate curve is dangerous. A declining pooled CST curve can be produced by changing sample composition rather than real learning. In this simulation, later nth engagements are disproportionately contributed by experts who were already better to begin with.
-"""
-st.info(lesson)
 
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3 = st.tabs([
     "Aggregate view",
     "Segmented view",
     "Diagnostics",
-    "Teaching notes",
 ])
 
 with tab1:
@@ -422,10 +417,6 @@ with tab1:
         st.metric("Experts at final engagement", int(aggregate["n_experts"].iloc[-1]))
         st.metric("Aggregate CST at engagement 1", f"{aggregate['avg_cst'].iloc[0]:.1f}")
         st.metric("Aggregate CST at final engagement", f"{aggregate['avg_cst'].iloc[-1]:.1f}")
-        st.write("What to notice")
-        st.write(
-            "If the aggregate curve slopes down, that does not by itself imply within-expert learning. Check whether later positions are supported by a different subset of experts."
-        )
 
     with st.expander("Show segmented curves here too"):
         st.line_chart(segmented_chart, height=360)
@@ -433,10 +424,6 @@ with tab1:
 with tab2:
     st.subheader("Segmented CST Curves")
     st.line_chart(segmented_chart, height=420)
-    st.write("Interpretation")
-    st.write(
-        "Vertical separation across curves indicates baseline differences across experts who survive to higher engagement counts. Flat within-cohort lines imply little true learning. Strong downward slopes within each cohort would be stronger evidence of real within-expert improvement."
-    )
     segmented_table = segmented.copy()
     segmented_table["avg_cst"] = segmented_table["avg_cst"].round(2)
     st.dataframe(segmented_table, use_container_width=True)
@@ -465,34 +452,11 @@ with tab3:
     with st.expander("Raw expert-level data sample"):
         st.dataframe(df.head(500).round(2), use_container_width=True)
 
-with tab4:
-    st.subheader("How to teach with the controls")
-    st.markdown(
-        """
-1. **Start from the default aggregate view.** Ask whether the pattern looks like learning.
-2. **Then open the segmented view.** Show that much of the pattern is vertical separation, not within-group decline.
-3. **Increase selection strength.** The aggregate decline gets steeper even if true learning stays close to zero.
-4. **Increase between-expert heterogeneity.** The segmented curves separate more strongly.
-5. **Set true learning close to zero.** If the aggregate still declines, that demonstrates the core point.
-6. **Increase noise or reduce number of experts.** The tail gets spiky because late averages become unstable.
-7. **Add positive case complexity drift.** This can flatten or offset real learning.
-        """
-    )
-
-    st.subheader("Interpretive lesson")
-    st.write(
-        "When the composition of who remains in the sample changes over sequence position, aggregate trajectories confound within-expert change with between-expert selection. The right question is usually not just 'what is the average outcome at nth engagement?' but 'who is still represented at nth engagement, and how do they differ from those who are no longer represented?'"
-    )
-
-    st.subheader("Suggested classroom demos")
-    st.write(
-        "A strong sequence is: first show a misleading aggregate decline, then reveal segmented curves, then use the selection-strength knob to make the artifact stronger or weaker in real time."
-    )
-
-
 st.download_button(
     label="Download simulated data as CSV",
     data=df.to_csv(index=False).encode("utf-8"),
     file_name="call_center_simulation.csv",
     mime="text/csv",
 )
+
+
